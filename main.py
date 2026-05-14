@@ -8,15 +8,14 @@ import json
 import time
 import random
 import asyncio
-import re
 import sys
 from datetime import datetime
 import aiohttp
+from aiohttp import web
 from telethon import TelegramClient, events
 from telethon.errors import SessionPasswordNeededError
-from telethon.tl.types import User
 import colorama
-from colorama import Fore, Style, Back
+from colorama import Fore, Style
 
 colorama.init(autoreset=True)
 
@@ -186,7 +185,7 @@ async def random_human_pings(client):
 # ---------------------------------------------------------
 async def run_bot():
     if not config["api_id"] or not config["api_hash"]:
-        print(f"{Fore.RED}API ID and Hash missing! Go to settings.{Style.RESET_ALL}")
+        print(f"{Fore.RED}API ID and Hash missing! Run locally first to setup.{Style.RESET_ALL}")
         return
 
     client = TelegramClient(SESSION_NAME, config["api_id"], config["api_hash"])
@@ -203,7 +202,7 @@ async def run_bot():
             return # Only reply to allowed targets
 
         text = event.raw_text
-        print(f"\n[{Fore.CYAN}IN{Style.RESET_ALL}] {sender.first_name}: {text}")
+        print(f"\n[{Fore.CYAN}IN{Style.RESET_ALL}] {sender.first_name if sender else 'User'}: {text}")
 
         # AI Generate
         reply_text = await AIEngine.generate_reply(user_id, text)
@@ -221,8 +220,13 @@ async def run_bot():
     
     if not await client.is_user_authorized():
         print(f"{Fore.YELLOW}Authorization required.{Style.RESET_ALL}")
-        if config["is_render"]:
-            print(f"{Fore.RED}Cannot authenticate in Render! Generate session.session locally first.{Style.RESET_ALL}")
+        # Automatically detect if running in Render/Cloud and prevent input hanging
+        is_interactive = sys.stdin.isatty()
+        is_render_env = os.environ.get("RENDER", "false").lower() == "true"
+        
+        if is_render_env or not is_interactive:
+            print(f"{Fore.RED}[CRITICAL ERROR] Cannot authenticate in Render/Cloud!{Style.RESET_ALL}")
+            print(f"{Fore.RED}You MUST generate 'vip_human_god.session' locally on Termux/PC first and upload it!{Style.RESET_ALL}")
             sys.exit(1)
             
         await client.send_code_request(config["phone"])
@@ -238,19 +242,23 @@ async def run_bot():
     # Start Random Ping Task
     asyncio.create_task(random_human_pings(client))
     
-    # Render Keep-Alive Server (Dummy Web)
-    if config["is_render"]:
-        app = aiohttp.web.Application()
-        app.router.add_get('/', lambda r: aiohttp.web.Response(text="VIP HUMAN GOD ONLINE"))
-        runner = aiohttp.web.AppRunner(app)
+    # Render Keep-Alive Server (Dummy Web Server to satisfy Render port binding)
+    is_render_env = os.environ.get("RENDER", "false").lower() == "true"
+    if is_render_env:
+        print(f"{Fore.YELLOW}Starting Web Server for Render Keep-Alive...{Style.RESET_ALL}")
+        app = web.Application()
+        app.router.add_get('/', lambda r: web.Response(text="VIP HUMAN GOD - REAL ACCOUNT AI SYSTEM IS ONLINE"))
+        runner = web.AppRunner(app)
         await runner.setup()
-        site = aiohttp.web.TCPSite(runner, '0.0.0.0', int(os.environ.get('PORT', 8080)))
+        port = int(os.environ.get('PORT', 8080))
+        site = web.TCPSite(runner, '0.0.0.0', port)
         await site.start()
+        print(f"{Fore.GREEN}Keep-Alive Server Running on Port {port}{Style.RESET_ALL}")
 
     await client.run_until_disconnected()
 
 # ---------------------------------------------------------
-# [7] TERMINAL UI ENGINE
+# [7] TERMINAL UI ENGINE & CLOUD DETECTOR
 # ---------------------------------------------------------
 def clear_screen():
     os.system('cls' if os.name == 'nt' else 'clear')
@@ -269,14 +277,29 @@ def show_menu():
     print(f"{Fore.RED}[00] EXIT{Style.RESET_ALL}\n")
 
 def menu_loop():
-    if config["is_render"]:
-        # Skip UI in Render, directly start
-        asyncio.run(run_bot())
+    # 🔥 BULLETPROOF CLOUD DETECTION 🔥
+    is_render_env = os.environ.get("RENDER", "false").lower() == "true"
+    is_interactive = sys.stdin.isatty() # Checks if a real terminal/keyboard is attached
+
+    if is_render_env or not is_interactive:
+        print(f"\n{Fore.MAGENTA}[☁️ CLOUD MODE DETECTED]{Style.RESET_ALL} Skipping Terminal UI...")
+        try:
+            asyncio.run(run_bot())
+        except KeyboardInterrupt:
+            print("\nShutting down.")
+        except Exception as e:
+            print(f"{Fore.RED}Fatal Error: {e}{Style.RESET_ALL}")
         return
 
     while True:
         show_menu()
-        choice = input(f"{Fore.GREEN}Select Option ❯ {Style.RESET_ALL}")
+        try:
+            choice = input(f"{Fore.GREEN}Select Option ❯ {Style.RESET_ALL}")
+        except EOFError:
+            # Fallback if EOF is triggered somehow locally
+            print(f"\n{Fore.MAGENTA}[☁️ AUTO START]{Style.RESET_ALL} Starting bot automatically...")
+            asyncio.run(run_bot())
+            return
 
         if choice == '1':
             try:
@@ -294,7 +317,12 @@ def menu_loop():
             
         elif choice == '3':
             print("\n--- ACCOUNT SETTING ---")
-            config["api_id"] = int(input("Enter api_id: "))
+            try:
+                config["api_id"] = int(input("Enter api_id: "))
+            except ValueError:
+                print(f"{Fore.RED}Invalid api_id. Must be a number.{Style.RESET_ALL}")
+                time.sleep(1)
+                continue
             config["api_hash"] = input("Enter api_hash: ")
             config["phone"] = input("Enter phone number (with country code): ")
             save_config(config)
@@ -315,13 +343,14 @@ def menu_loop():
             print("3. Set Targets (Telegram User IDs).")
             print("4. Press START. It will ask for OTP once.")
             print("5. After first login, a 'vip_human_god.session' file is created.")
+            print("6. Upload the generated .session file + config.json to Render for 24/7 hosting.")
             input("\nPress Enter to go back...")
 
         elif choice == '6':
             print("\n--- SET TARGET ---")
             print("Current Targets:", config["targets"])
             tid = input("Enter Target Telegram User ID (e.g. 123456789): ")
-            if tid not in config["targets"]:
+            if tid and tid not in config["targets"]:
                 config["targets"].append(tid)
                 save_config(config)
                 print("✅ Target Added!")
