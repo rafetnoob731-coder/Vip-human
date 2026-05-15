@@ -3,7 +3,7 @@
     "api_hash": "6a5eed06f032bdb1efd30ac8a16dff66",
     "phone": "8801721158629",
     "openrouter_key": "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",
-    "ai_model": "deepseek/deepseek-v4-flash:free",
+    "ai_model": "openrouder/free",
     "targets": [
         "7786718447",
         ""
